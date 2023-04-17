@@ -1,21 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Store struct {
-	qMap map[string][]string
-}
-
-type Consumer struct {
-	ch      chan string
-	timeout time.Time
+	qMap  map[string][]string
+	data  chan string
+	topic []string
 }
 
 func (q *Store) proceed(w http.ResponseWriter, r *http.Request) {
@@ -25,59 +24,106 @@ func (q *Store) proceed(w http.ResponseWriter, r *http.Request) {
 
 	switch method := r.Method; method {
 	case "PUT":
-		qVal, exist := q.qMap[queueName]
+		// return 400 if v is omit
+		queryVal := strings.Split(r.URL.RawQuery, "=")
+		if queryVal[0] != "v" {
+			http.Error(w, "", http.StatusBadRequest)
+			return
+		}
 
+		qVal, exist := q.qMap[queueName]
 		switch exist {
 		case true:
 			// Append val to existing key-val
-			println("Append val to existing key-val")
+			for _, e := range q.topic {
+				if e == queryVal[1] {
+					q.data <- queryVal[1]
+				}
+			}
 			q.qMap[queueName] = append(qVal, queryVal[1])
 		case false:
 			// Creating key-val if they are not exist
-			println("Creating key-val if they are not exist")
+			for _, e := range q.topic {
+				if e == queryVal[1] {
+					q.data <- queryVal[1]
+				}
+			}
 			q.qMap[queueName] = []string{queryVal[1]}
 		}
-		// if v is omit
-		queryVal := strings.Split(r.URL.RawQuery, "=")
-		if queryVal[0] == "" {
-			http.Error(w, "", http.StatusBadRequest)
-		}
-		fmt.Println(q) // Don't forget to erase me
+		//fmt.Println(q) // Don't forget to erase me
 
 	case "GET":
 		switch queryVal[0] {
 		case "": // Return immediately
-			qVal, exist := q.qMap[queueName]
-			switch exist {
-			case true:
-				// Response 404 if qVal is empty
-				if len(qVal) == 0 {
-					println("404 qVal is empty")
-					http.Error(w, "", http.StatusNotFound)
-					return
-				}
-				// Response existed requested val
-				_, err := io.WriteString(w, qVal[0])
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					fmt.Println(err)
-					return
-				}
-				q.qMap[queueName] = qVal[1:] // Delete from qMap
-			case false: // Response 404 if key-val was not created
-				println("404 key-val was not created")
+			v := pop(q, queueName)
+			if v == "" {
 				http.Error(w, "", http.StatusNotFound)
 			}
+			_, err := io.WriteString(w, v)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
 
-		case "timeout":
-			fmt.Println(queryVal[1])
+		case "timeout": // Return with timeout
+			v := pop(q, queueName)
+			if v == "" {
+				http.Error(w, "", http.StatusNotFound)
+			}
+			_, err := io.WriteString(w, v)
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+
+			// Subscribe to topic
+			q.topic = append(q.topic, queryVal[0])
+
+			t, err := strconv.Atoi(queryVal[1])
+			dur := time.Second * time.Duration(t)
+			if err != nil {
+				panic(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), dur)
+
+			defer cancel()
+
+			go func(c context.Context) {
+
+				select {
+				case val := <-q.data:
+					_, err := io.WriteString(w, val)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						fmt.Println(err)
+						return
+					}
+				}
+			}(ctx)
+
 		}
 	}
 }
 
+func pop(q *Store, queueName string) string {
+	qVal, exist := q.qMap[queueName]
+	if exist { // Response 404 if qVal is empty
+		if len(qVal) == 0 {
+			return ""
+		}
+		// Response existed requested val
+		q.qMap[queueName] = qVal[1:] // Delete from qMap
+		return qVal[0]
+	}
+	return ""
+}
+
 func NewStore() *Store {
 	return &Store{
-		qMap: make(map[string][]string),
+		qMap:  make(map[string][]string),
+		data:  make(chan string),
+		topic: make([]string, 0),
 	}
 }
 
