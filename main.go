@@ -6,56 +6,72 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Store struct {
 	qMap map[string][]string
 }
 
+type Consumer struct {
+	ch      chan string
+	timeout time.Time
+}
+
 func (q *Store) proceed(w http.ResponseWriter, r *http.Request) {
 
-	qName, _ := strings.CutPrefix(r.URL.Path, "/")
+	queueName, _ := strings.CutPrefix(r.URL.Path, "/")
+	queryVal := strings.Split(r.URL.RawQuery, "=")
 
-	switch queryVal := strings.Split(r.URL.RawQuery, "="); queryVal[0] {
-	case "v":
+	switch method := r.Method; method {
+	case "PUT":
+		qVal, exist := q.qMap[queueName]
 
-		qVal, exist := q.qMap[qName]
 		switch exist {
 		case true:
 			// Append val to existing key-val
-			q.qMap[qName] = append(qVal, queryVal[1])
+			println("Append val to existing key-val")
+			q.qMap[queueName] = append(qVal, queryVal[1])
 		case false:
 			// Creating key-val if they are not exist
-			q.qMap[qName] = []string{queryVal[1]}
+			println("Creating key-val if they are not exist")
+			q.qMap[queueName] = []string{queryVal[1]}
 		}
+		// if v is omit
+		queryVal := strings.Split(r.URL.RawQuery, "=")
+		if queryVal[0] == "" {
+			http.Error(w, "", http.StatusBadRequest)
+		}
+		fmt.Println(q) // Don't forget to erase me
 
-		fmt.Println(q)
-
-	case "timeout":
-		fmt.Println(queryVal[1])
-
-	case "": // Return val to requested key
-		qVal, exist := q.qMap[qName]
-		switch exist {
-		case true:
-			// Response 404 if qVal is empty
-			if len(qVal) == 0 {
+	case "GET":
+		switch queryVal[0] {
+		case "": // Return immediately
+			qVal, exist := q.qMap[queueName]
+			switch exist {
+			case true:
+				// Response 404 if qVal is empty
+				if len(qVal) == 0 {
+					println("404 qVal is empty")
+					http.Error(w, "", http.StatusNotFound)
+					return
+				}
+				// Response existed requested val
+				_, err := io.WriteString(w, qVal[0])
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					fmt.Println(err)
+					return
+				}
+				q.qMap[queueName] = qVal[1:] // Delete from qMap
+			case false: // Response 404 if key-val was not created
+				println("404 key-val was not created")
 				http.Error(w, "", http.StatusNotFound)
-				return
 			}
-			// Response existed requested val
-			_, err := io.WriteString(w, qVal[0])
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			q.qMap[qName] = qVal[1:] // Delete from qMap
-		case false: // Response 404 if key-val was not created
-			http.Error(w, "", http.StatusNotFound)
-		}
 
-	default: // Return 400 if v body is empty
-		http.Error(w, "", http.StatusBadRequest)
+		case "timeout":
+			fmt.Println(queryVal[1])
+		}
 	}
 }
 
