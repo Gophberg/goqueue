@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -17,6 +18,7 @@ func (q *Store) proceed(w http.ResponseWriter, r *http.Request) {
 
 	switch queryVal := strings.Split(r.URL.RawQuery, "="); queryVal[0] {
 	case "v":
+
 		qVal, exist := q.qMap[qName]
 		switch exist {
 		case true:
@@ -28,12 +30,33 @@ func (q *Store) proceed(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Println(q)
+
 	case "timeout":
 		fmt.Println(queryVal[1])
-	default:
+
+	case "": // Return val to requested key
+		qVal, exist := q.qMap[qName]
+		switch exist {
+		case true:
+			// Response 404 if qVal is empty
+			if len(qVal) == 0 {
+				http.Error(w, "", http.StatusNotFound)
+				return
+			}
+			// Response existed requested val
+			_, err := io.WriteString(w, qVal[0])
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			q.qMap[qName] = qVal[1:] // Delete from qMap
+		case false: // Response 404 if key-val was not created
+			http.Error(w, "", http.StatusNotFound)
+		}
+
+	default: // Return 400 if v body is empty
 		http.Error(w, "", http.StatusBadRequest)
 	}
-	//	qMap.Val = qMap.Val[1:] // Delete from qMap
 }
 
 func NewStore() *Store {
