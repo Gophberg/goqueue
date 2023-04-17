@@ -7,28 +7,39 @@ import (
 	"strings"
 )
 
-type Queue struct {
-	Name string   `json:"name"`
-	Val  []string `json:"val"`
+type Store struct {
+	qMap map[string][]string
 }
 
-func (q Queue) proceed(w http.ResponseWriter, r *http.Request) {
+func (q *Store) proceed(w http.ResponseWriter, r *http.Request) {
 
-	path, _ := strings.CutPrefix(r.URL.Path, "/")
+	qName, _ := strings.CutPrefix(r.URL.Path, "/")
 
-	switch rawQeury := strings.Split(r.URL.RawQuery, "="); rawQeury[0] {
+	switch queryVal := strings.Split(r.URL.RawQuery, "="); queryVal[0] {
 	case "v":
-		q.Name = path
-		q.Val = append(q.Val, rawQeury[1])
+		qVal, exist := q.qMap[qName]
+		switch exist {
+		case true:
+			// Append val to existing key-val
+			q.qMap[qName] = append(qVal, queryVal[1])
+		case false:
+			// Creating key-val if they are not exist
+			q.qMap[qName] = []string{queryVal[1]}
+		}
 
 		fmt.Println(q)
 	case "timeout":
-		fmt.Println(rawQeury[1])
+		fmt.Println(queryVal[1])
 	default:
 		http.Error(w, "", http.StatusBadRequest)
 	}
+	//	qMap.Val = qMap.Val[1:] // Delete from qMap
+}
 
-	//	q.Val = q.Val[1:] // Delete from queue
+func NewStore() *Store {
+	return &Store{
+		qMap: make(map[string][]string),
+	}
 }
 
 func main() {
@@ -36,9 +47,9 @@ func main() {
 	flag.IntVar(&port, "port", 3000, "set the port for http server without colon, like `3000`")
 	flag.Parse()
 
-	q := Queue{}
+	store := NewStore()
 
-	http.HandleFunc("/", q.proceed)
+	http.HandleFunc("/", store.proceed)
 
 	sPort := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting at %s\n", sPort)
